@@ -31,14 +31,6 @@ private bool isItemRoot(const ref JSONValue item)
 	return ("root" in item) != null;
 }
 
-private bool isItemRemote(const ref JSONValue item)
-{
-	return ("remoteItem" in item) != null;
-}
-
-// HACK: OneDrive Biz does not return parentReference for the root
-string defaultDriveId;
-
 private Item makeItem(const ref JSONValue jsonItem)
 {
 	ItemType type;
@@ -46,24 +38,22 @@ private Item makeItem(const ref JSONValue jsonItem)
 		type = ItemType.file;
 	} else if (isItemFolder(jsonItem)) {
 		type = ItemType.dir;
-	} else if (isItemRemote(jsonItem)) {
-		type = ItemType.remote;
+	} else {
+		assert(0);
 	}
 
 	Item item = {
-		driveId: isItemRoot(jsonItem) ? defaultDriveId : jsonItem["parentReference"]["driveId"].str,
 		id: jsonItem["id"].str,
-		name: "name" in jsonItem ? jsonItem["name"].str : null, // name may be missing for deleted files in OneDrive Biz
+		name: jsonItem["name"].str,
 		type: type,
-		eTag: "eTag" in jsonItem ? jsonItem["eTag"].str : null, // eTag is not returned for the root in OneDrive Biz
-		cTag: "cTag" in jsonItem ? jsonItem["cTag"].str : null, // cTag is missing in old files (and all folders)
-		mtime: "fileSystemInfo" in jsonItem ? SysTime.fromISOExtString(jsonItem["fileSystemInfo"]["lastModifiedDateTime"].str) : SysTime(0),
-		parentDriveId: isItemRoot(jsonItem) ? null : jsonItem["parentReference"]["driveId"].str,
+		eTag: isItemRoot(jsonItem) ? null : jsonItem["eTag"].str, // eTag is not returned for the root in OneDrive Biz
+		cTag: "cTag" !in jsonItem ? null : jsonItem["cTag"].str, // cTag is missing in old files (plus all folders)
+		mtime: SysTime.fromISOExtString(jsonItem["fileSystemInfo"]["lastModifiedDateTime"].str),
 		parentId: isItemRoot(jsonItem) ? null : jsonItem["parentReference"]["id"].str
 	};
 
 	// extract the file hash
-	if (isItemFile(jsonItem)) {
+	if (type == ItemType.file) {
 		if ("hashes" in jsonItem["file"]) {
 			if ("crc32Hash" in jsonItem["file"]["hashes"]) {
 				item.crc32Hash = jsonItem["file"]["hashes"]["crc32Hash"].str;
@@ -74,6 +64,9 @@ private Item makeItem(const ref JSONValue jsonItem)
 			} else {
 				log.vlog("The file does not have any hash");
 			}
+		} else {
+			// 'hashes' is missing in old files
+			log.vlog("No hashes facet");
 		}
 	}
 
@@ -115,7 +108,7 @@ final class SyncEngine
 	// list of items to skip while applying the changes
 	private string[] skippedItems;
 	// list of items to delete after the changes has been downloaded
-	private string[2][] idsToDelete;
+	private string[] idsToDelete;
 
 	this(Config cfg, OneDriveApi onedrive, ItemDatabase itemdb, SelectiveSync selectiveSync)
 	{
@@ -148,9 +141,8 @@ final class SyncEngine
 		} catch (FileException e) {
 			// swallow exception
 		}
-
+		
 		try {
-			defaultDriveId = onedrive.getDefaultDrive()["id"].str;
 			JSONValue changes;
 			do {
 				// get changes from the server
@@ -188,58 +180,38 @@ final class SyncEngine
 		assumeSafeAppend(skippedItems);
 	}
 
-	private void applyDifference(JSONValue jsonItem)
+	private void applyDifference(JSONValue item)
 	{
-		log.vlog(jsonItem["id"].str, " ", "name" in jsonItem ? jsonItem["name"].str : null);
-		Item item = makeItem(jsonItem);
+		string id = item["id"].str;
+		string name = item["name"].str;
 
-		string path = ".";
-		bool unwanted;
-		unwanted |= skippedItems.find(item.parentId).length != 0;
-		unwanted |= selectiveSync.isNameExcluded(item.name);
+		log.vlog(id, " ", name);
 
-		if (!unwanted && !isItemRoot(jsonItem)) {
-			// delay path computation after assuring the item parent is not excluded
-			path = itemdb.computePath(item.parentDriveId, item.parentId) ~ "/" ~ item.name;
-			// selective sync
-			unwanted |= selectiveSync.isPathExcluded(path);
+		// eTag and parentId do not exists for the root in OneDrive Biz
+		string eTag, parentId;
+		if (!isItemRoot(item)) {
+			eTag = item["eTag"].str;
+			parentId = item["parentReference"]["id"].str;
 		}
 
 		// skip unwanted items early
-		if (unwanted) {
+		if (skippedItems.find(parentId).length != 0) {
 			log.vlog("Filtered out");
-			skippedItems ~= item.id;
+			skippedItems ~= id;
 			return;
 		}
-
-		// check if the item is going to be deleted
-		if (isItemDeleted(jsonItem)) {
-			log.vlog("The item is marked for deletion");
-			idsToDelete ~= [item.driveId, item.id];
-			return;
-		}
-
-		// check the item type
-		if (isItemRemote(jsonItem)) {
-			// TODO
-			// check name change
-			// scan the children later
-			// fix child references
-			log.vlog("Remote items are not supported yet");
-			skippedItems ~= item.id;
-			return;
-		} else if (!isItemFile(jsonItem) && !isItemFolder(jsonItem)) {
-			log.vlog("The item is neither a file nor a directory, skipping");
-			skippedItems ~= item.id;
+		if (selectiveSync.isNameExcluded(name)) {
+			log.vlog("Filtered out");
+			skippedItems ~= id;
 			return;
 		}
 
 		// rename the local item if it is unsynced and there is a new version of it
 		Item oldItem;
 		string oldPath;
-		bool cached = itemdb.selectById(item.driveId, item.id, oldItem);
-		if (cached && item.eTag != oldItem.eTag) {
-			oldPath = itemdb.computePath(item.driveId, item.id);
+		bool cached = itemdb.selectById(id, oldItem);
+		if (cached && eTag != oldItem.eTag) {
+			oldPath = itemdb.computePath(id);
 			if (!isItemSynced(oldItem, oldPath)) {
 				log.vlog("The local item is unsynced, renaming");
 				if (exists(oldPath)) safeRename(oldPath);
@@ -247,17 +219,44 @@ final class SyncEngine
 			}
 		}
 
+		// check if the item is to be deleted
+		if (isItemDeleted(item)) {
+			log.vlog("The item is marked for deletion");
+			if (cached) idsToDelete ~= id;
+			return;
+		}
+
+		// compute the path of the item
+		string path = ".";
+		if (parentId) {
+			path = itemdb.computePath(parentId) ~ "/" ~ name;
+			// selective sync
+			if (selectiveSync.isPathExcluded(path)) {
+				log.vlog("Filtered out: ", path);
+				skippedItems ~= id;
+				return;
+			}
+		}
+
+		if (!isItemFile(item) && !isItemFolder(item)) {
+			log.vlog("The item is neither a file nor a directory, skipping");
+			skippedItems ~= id;
+			return;
+		}
+
+		Item newItem = makeItem(item);
+
 		if (!cached) {
-			applyNewItem(item, path);
+			applyNewItem(newItem, path);
 		} else {
-			applyChangedItem(oldItem, oldPath, item, path);
+			applyChangedItem(oldItem, newItem, path);
 		}
 
 		// save the item in the db
 		if (oldItem.id) {
-			itemdb.update(item);
+			itemdb.update(newItem);
 		} else {
-			itemdb.insert(item);
+			itemdb.insert(newItem);
 		}
 	}
 
@@ -270,7 +269,7 @@ final class SyncEngine
 				setTimes(path, item.mtime, item.mtime);
 				return;
 			} else {
-				log.vlog("The local item is out of sync, renaming...");
+				log.vlog("The local item is out of sync, renaming ...");
 				safeRename(path);
 			}
 		}
@@ -281,28 +280,23 @@ final class SyncEngine
 			break;
 		case ItemType.dir:
 			log.log("Creating directory: ", path);
-			//Use mkdirRecuse to deal nested dir
-			mkdirRecurse(path);
+			mkdir(path);
 			break;
-		case ItemType.remote:
-			assert(0);
 		}
 		setTimes(path, item.mtime, item.mtime);
 	}
 
-	// update a local item
-	// the local item is assumed to be in sync with the local db
-	private void applyChangedItem(Item oldItem, string oldPath, Item newItem, string newPath)
+	private void applyChangedItem(Item oldItem, Item newItem, string newPath)
 	{
-		assert(oldItem.driveId == newItem.driveId);
 		assert(oldItem.id == newItem.id);
 		assert(oldItem.type == newItem.type);
 
 		if (oldItem.eTag != newItem.eTag) {
+			string oldPath = itemdb.computePath(oldItem.id);
 			if (oldPath != newPath) {
 				log.log("Moving: ", oldPath, " -> ", newPath);
 				if (exists(newPath)) {
-					log.vlog("The destination is occupied, renaming the conflicting file...");
+					log.vlog("The destination is occupied, renaming ...");
 					safeRename(newPath);
 				}
 				rename(oldPath, newPath);
@@ -349,8 +343,6 @@ final class SyncEngine
 				log.vlog("The local item is a file but should be a directory");
 			}
 			break;
-		case ItemType.remote:
-			assert(0);
 		}
 		return false;
 	}
@@ -358,11 +350,9 @@ final class SyncEngine
 	private void deleteItems()
 	{
 		log.vlog("Deleting files ...");
-		foreach_reverse (i; idsToDelete) {
-			Item item;
-			if (!itemdb.selectById(i[0], i[1], item)) continue; // check if the item is in the db
-			string path = itemdb.computePath(i[0], i[1]);
-			itemdb.deleteById(i[0], i[1]);
+		foreach_reverse (id; idsToDelete) {
+			string path = itemdb.computePath(id);
+			itemdb.deleteById(id);
 			if (exists(path)) {
 				if (isFile(path)) {
 					remove(path);
@@ -410,7 +400,7 @@ final class SyncEngine
 			log.vlog("Filtered out");
 			return;
 		}
-		string path = itemdb.computePath(item.driveId, item.id);
+		string path = itemdb.computePath(item.id);
 		if (selectiveSync.isPathExcluded(path)) {
 			log.vlog("Filtered out: ", path);
 			return;
@@ -423,8 +413,6 @@ final class SyncEngine
 		case ItemType.file:
 			uploadFileDifferences(item, path);
 			break;
-		case ItemType.remote:
-			assert(0);
 		}
 	}
 
@@ -439,7 +427,7 @@ final class SyncEngine
 			} else {
 				log.vlog("The directory has not changed");
 				// loop trough the children
-				foreach (Item child; itemdb.selectChildren(item.driveId, item.id)) {
+				foreach (Item child; itemdb.selectChildren(item.id)) {
 					uploadDifferences(child);
 				}
 			}
@@ -564,7 +552,7 @@ final class SyncEngine
 			if (e.httpStatusCode == 404) log.log(e.msg);
 			else throw e;
 		}
-		itemdb.deleteById(item.driveId, item.id);
+		itemdb.deleteById(item.id);
 	}
 
 	private void uploadLastModifiedTime(const(char)[] id, const(char)[] eTag, SysTime mtime)
