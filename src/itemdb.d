@@ -228,7 +228,7 @@ final class ItemDatabase
 		string path;
 		Item item;
 		while (true) {
-			enforce(selectById(driveId, id, item), "Unknow item id");
+			enforce(selectById(driveId, id, item), "Unknown item id");
 			if (item.type == ItemType.remote) {
 				// substitute the last name with the current
 				path = item.name ~ path[indexOf(path, '/') .. $];
