@@ -197,14 +197,6 @@ final class SyncEngine
 		// skip unwanted items early
 		if (skippedItems.find(parentId).length != 0) {
 			log.vlog("Filtered out");
-<<<<<<< HEAD
-			skippedItems ~= id;
-			return;
-		}
-		if (selectiveSync.isNameExcluded(name)) {
-			log.vlog("Filtered out");
-			skippedItems ~= id;
-=======
 			skippedItems ~= item.id;
 			return;
 		}
@@ -221,18 +213,11 @@ final class SyncEngine
 		} else if (!isItemFile(jsonItem) && !isItemFolder(jsonItem) && !isItemDeleted(jsonItem)) {
 			log.vlog("The item is neither a file nor a directory, skipping");
 			skippedItems ~= item.id;
->>>>>>> 5a5ec0d5956662871da7ab161f746e69e22f0c61
 			return;
 		}
 
 		// check if the item has been seen before
 		Item oldItem;
-<<<<<<< HEAD
-		string oldPath;
-		bool cached = itemdb.selectById(id, oldItem);
-		if (cached && eTag != oldItem.eTag) {
-			oldPath = itemdb.computePath(id);
-=======
 		bool cached = itemdb.selectById(item.driveId, item.id, oldItem);
 
 		// check if the item is going to be deleted
@@ -252,7 +237,6 @@ final class SyncEngine
 		string oldPath;
 		if (cached && item.eTag != oldItem.eTag) {
 			oldPath = itemdb.computePath(item.driveId, item.id);
->>>>>>> 5a5ec0d5956662871da7ab161f746e69e22f0c61
 			if (!isItemSynced(oldItem, oldPath)) {
 				log.vlog("The local item is unsynced, renaming");
 				if (exists(oldPath)) safeRename(oldPath);
