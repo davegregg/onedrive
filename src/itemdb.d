@@ -240,12 +240,22 @@ final class ItemDatabase
 		string path;
 		auto s = db.prepare("SELECT name, parentId FROM item WHERE id = ?");
 		while (true) {
+<<<<<<< HEAD
 			s.bind(1, id);
 			auto r = s.exec();
 			enforce(!r.empty, "Unknow item id");
 			if (r.front[1]) {
 				if (path) path = r.front[0].idup ~ "/" ~ path;
 				else path = r.front[0].idup;
+=======
+			enforce(selectById(driveId, id, item), "Unknown item id");
+			if (item.type == ItemType.remote) {
+				// substitute the last name with the current
+				path = item.name ~ path[indexOf(path, '/') .. $];
+			} else if (item.parentId) {
+				if (path) path = item.name ~ "/" ~ path;
+				else path = item.name;
+>>>>>>> 5a5ec0d5956662871da7ab161f746e69e22f0c61
 			} else {
 				// root
 				if (!path) path = ".";

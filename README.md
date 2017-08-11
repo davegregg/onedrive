@@ -79,14 +79,35 @@ journalctl --user-unit onedrive -f
 
 ### Usage:
 ```
-onedrive [OPTION]...
 
--m --monitor Keep monitoring for local and remote changes.
-    --resync Forget the last saved state, perform a full sync.
-    --logout Logout the current user.
-   --confdir Set the directory to use to store the configuration files.
--v --verbose Print more details, useful for debugging.
--h    --help This help information.
+`--monitor` keeps the application running and monitoring for changes
+
+`&` puts the application in background and leaves the terminal interactive
+
+## Extra
+
+### Reporting issues
+If you encounter any bugs you can report them here on Github. Before filing an issue be sure to:
+
+1. Have compiled the application in debug mode with `make debug`
+2. Run the application in verbose mode `onedrive --verbose`
+3. Have the log of the error (preferably uploaded on an external website such as [pastebin](https://pastebin.com/))
+4. Collect any information that you may think it is relevant to the error (such as the steps to trigger it)
+
+### All available commands:
+```text
+Usage: onedrive [OPTION]...
+
+no option        Sync and exit
+       --confdir Set the directory used to store the configuration files
+        --logout Logout the current user
+-m     --monitor Keep monitoring for local and remote changes
+   --print-token Print the access token, useful for debugging
+        --resync Forget the last saved state, perform a full sync
+       --syncdir Set the directory used to sync the files are synced
+-v     --verbose Print more details, useful for debugging
+       --version Print the version and exit
+-h        --help This help information.
 ```
 
 ### Notes:
